@@ -37,7 +37,7 @@ simulated-fluorescence P1, close to its real-fluorescence 0.034, so the simulati
 ## Temporal consistency with SAM 2
 
 SegFormer masks prompt SAM 2.1 (all instruments as one object) at keyframes; SAM 2 propagates between
-them (`sr3d/segmentation/tracking.py`, `scripts/run_tracking.py`). Clips are 150 frames (6 s at 25 fps)
+them (`sr3d/segmentation/tracking.py`, `scripts/run_tracking.py`). Clips are 150 frames (300 video frames, 5 s at the 60 fps the video container reports)
 picked from ground-truth tool fractions only. Tuned on P1; P3 run once.
 
 ```

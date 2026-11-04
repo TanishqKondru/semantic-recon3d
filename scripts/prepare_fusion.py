@@ -34,11 +34,12 @@ def main():
     ap.add_argument("--seg", default="outputs/segmentation/segformer_b2_fluor/best")
     ap.add_argument("--sam", default="large")
     ap.add_argument("--every", type=int, default=50, help="SAM 2 re-prompt interval in scene frames")
+    ap.add_argument("--skip-sam2", action="store_true", help="depth and SegFormer only (enough for proximity)")
     a = ap.parse_args()
 
     scene = Scene(a.scene)
     out = Path(a.out) / scene.meta.name
-    for d in ("depth_raft", "prob_segformer", "prob_sam2"):
+    for d in ("depth_raft", "prob_segformer") + (() if a.skip_sam2 else ("prob_sam2",)):
         (out / d).mkdir(parents=True, exist_ok=True)
     frames = [scene[i] for i in range(len(scene))]
     t0 = time.time()
@@ -59,6 +60,8 @@ def main():
     torch.cuda.empty_cache()
     print(f"segformer done, {(time.time() - t0) / 60:.1f} min", flush=True)
 
+    if a.skip_sam2:
+        return
     sam = load_sam2(a.sam)
     prompts = {i: seg_prob[i] > 0.5 for i in keyframes(len(frames), a.every)}
     for i, p in enumerate(track(sam, [f.rgb for f in frames], prompts)):

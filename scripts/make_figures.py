@@ -120,7 +120,7 @@ def tracking_clips(out, log="outputs/segmentation/tracking_val_small_r2.log"):
     for i, (k, (label, color)) in enumerate(methods.items()):
         ax.bar(x + (i - 1) * 0.27, [r[1][k] for r in rows], 0.27, label=label, color=color)
     ax.set_xticks(x, [str(r[0]) for r in rows], fontsize=8)
-    ax.set_xlabel("P1 clip start frame (each clip 150 frames, 6 s)"), ax.set_ylabel("clip IoU"), ax.set_ylim(0, 1)
+    ax.set_xlabel("P1 clip start frame (each clip 150 frames, 5 s)"), ax.set_ylabel("clip IoU"), ax.set_ylim(0, 1)
     ax.legend(fontsize=8, ncol=3, loc="lower left"), ax.grid(axis="y", alpha=0.3)
     ax.set_title("SAM 2 propagation vs per-frame SegFormer on validation clips (P1)", fontsize=10)
     fig.tight_layout()
@@ -138,7 +138,7 @@ def tracking_test(out, result="outputs/segmentation/tracking_test.json"):
                                            ("sam2_every50", "SegFormer + SAM 2 large, every 50", "tab:blue"))):
         ax.bar(x + (i - 0.5) * 0.38, [c[k]["iou"] for c in clips], 0.38, label=label, color=color)
     ax.set_xticks(x, [str(c["start"]) for c in clips], fontsize=8)
-    ax.set_xlabel("P3 clip start frame (each clip 150 frames, 6 s)"), ax.set_ylabel("clip IoU"), ax.set_ylim(0, 1.15)
+    ax.set_xlabel("P3 clip start frame (each clip 150 frames, 5 s)"), ax.set_ylabel("clip IoU"), ax.set_ylim(0, 1.15)
     ax.set_yticks(np.arange(0, 1.01, 0.2))
     ax.legend(fontsize=8, ncol=3, loc="upper center"), ax.grid(axis="y", alpha=0.3)
     ax.set_title("Test patient P3, evaluated once: per-clip IoU", fontsize=10)
@@ -218,6 +218,65 @@ def fusion_labels(out, scene_dir="data/scenes/stereomis_P2_1_tools", cache="outp
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(out / "fusion_labels.png", dpi=110)
 
+# validated categorical slots (dataviz reference palette, light): blue, orange, aqua, yellow; ink for reference
+SLOTS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+INK, MUTED = "#0b0b0b", "#52514e"
+
+
+def ros_proximity(out, rviz="docs/figures/ros_rviz_raw.png", result="outputs/ros/P2_1_6900_7500_s2/proximity_eval.json",
+                  frame=186):
+    """RViz render of the node's topics next to the distance it publishes, against the reference."""
+    e = json.loads(Path(result).read_text())["per_frame_m"]
+    t = np.arange(len(e["ref"]))
+    img = plt.imread(rviz)[58:873, 364:1584]      # 3D view only (drop RViz panels)
+    fig, (a0, a1) = plt.subplots(1, 2, figsize=(13, 4.2), gridspec_kw={"width_ratios": [1.15, 1]})
+    a0.imshow(img), a0.axis("off")
+    a0.set_title(f"RViz at frame {frame}: fused tissue map (colour), instrument points (cyan), tip (magenta)",
+                 fontsize=9, color=INK)
+    series = (("ref", "reference (GT masks, all-frame map)", INK, 1.6),
+              ("online_segformer", "ROS node (causal map + live tissue)", SLOTS[0], 1.2),
+              ("live_frame", "current frame only, no map", SLOTS[1], 1.0))
+    for k, label, color, lw in series:
+        a1.plot(t, np.array(e[k]) * 1e3, color=color, lw=lw, label=label)
+    a1.axhline(2.0, color=MUTED, lw=0.8, ls="--")
+    a1.text(2, 2.15, "2 mm alarm", fontsize=8, color=MUTED)
+    a1.axvline(frame, color=MUTED, lw=0.8, ls=":")
+    a1.set_ylim(0, 8), a1.set_xlim(0, len(t) - 1)
+    a1.set_xlabel("frame (P2_1 test segment)", color=INK), a1.set_ylabel("instrument-tissue distance [mm]", color=INK)
+    a1.grid(alpha=0.25), a1.legend(fontsize=8, loc="upper right")
+    a1.set_title("Closest instrument-tissue distance per frame (gaps: no instrument)", fontsize=9, color=INK)
+    fig.tight_layout()
+    fig.savefig(out / "ros_proximity.png", dpi=120)
+
+
+def deploy_latency(out, report="outputs/ros/latency_report.json"):
+    """Per-frame compute of the ROS node, PyTorch vs TensorRT FP16, stacked by stage (lockstep runs)."""
+    r = json.loads(Path(report).read_text())
+    rows = (("PyTorch", r["lockstep_pytorch"]), ("TensorRT FP16", r["lockstep_tensorrt"]))
+    stages = (("depth", "stereo depth (RAFT)"), ("segmentation", "segmentation (SegFormer)"),
+              ("fusion", "TSDF fusion"), ("proximity", "proximity (k-d tree)"))
+    fig, ax = plt.subplots(figsize=(10, 2.8))
+    for y, (name, s) in enumerate(rows):
+        left = 0.0
+        for (k, label), color in zip(stages, SLOTS):
+            v = s[f"{k}_median_ms"]
+            ax.barh(y, v, left=left, height=0.5, color=color, edgecolor="#fcfcfb", linewidth=2,
+                    label=label if y == 0 else None)
+            if v > 12:
+                ax.text(left + v / 2, y, f"{v:.0f}", ha="center", va="center", fontsize=8, color=INK)
+            else:      # too narrow to hold its value: label it above the bar
+                ax.text(left + v / 2, y - 0.3, f"{v:.0f}", ha="center", va="bottom", fontsize=7.5, color=MUTED)
+            left += v
+        ax.text(left + 4, y, f"{s['compute_median_ms']:.0f} ms compute, {s['latency_median_ms']:.0f} ms latency "
+                f"(every frame: {s['rate_hz']:.1f} Hz)", va="center", fontsize=8.5, color=INK)
+    ax.set_yticks(range(len(rows)), [n for n, _ in rows])
+    ax.invert_yaxis(), ax.set_xlim(0, 420), ax.set_xlabel("median per-frame time [ms], RTX 5060 Laptop", color=INK)
+    ax.grid(axis="x", alpha=0.25), ax.legend(fontsize=8, ncol=4, loc="lower right", bbox_to_anchor=(1, 1.02))
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(out / "deploy_latency.png", dpi=120)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -227,7 +286,7 @@ def main():
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     figures = [training_curves, tracking_clips, tracking_test, fluorescence_sim, qualitative, fusion_heldout,
-               fusion_labels]
+               fusion_labels, ros_proximity, deploy_latency]
     for fn in figures:
         if not a.only or fn.__name__ in a.only:
             fn(out)

@@ -42,6 +42,16 @@ class TSDFMap:
         blocks = self.grid.compute_unique_block_coordinates(d, self.K, T_cw, 1.0, self.max_depth, self.trunc)
         self.grid.integrate(blocks, d, c, self.K, T_cw, 1.0, self.max_depth, self.trunc)
 
+    def points(self, min_weight: float = 3.0, colors: bool = False):
+        """Surface points (zero crossings) seen in at least `min_weight` frames, (N, 3) world, metres.
+        With `colors`, returns (points, rgb (N, 3) in [0, 1])."""
+        pcd = self.grid.extract_point_cloud(weight_threshold=min_weight)
+        pts = pcd.point.positions.cpu().numpy().astype(np.float64)
+        if not colors:
+            return pts
+        rgb = pcd.point.colors.cpu().numpy() if "colors" in pcd.point else np.full((len(pts), 3), 0.5)
+        return pts, rgb
+
     def mesh(self, min_weight: float = 3.0) -> o3d.geometry.TriangleMesh:
         """Surface seen in at least `min_weight` frames, vertex-coloured, as a legacy mesh."""
         m = self.grid.extract_triangle_mesh(weight_threshold=min_weight).to_legacy()

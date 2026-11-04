@@ -1,0 +1,125 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Help Height: 0
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Tissue map
+      Enabled: true
+      Topic:
+        Value: /sr3d/tissue_map
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Flat Squares
+      Size (m): 0.0007
+      Color Transformer: RGB8
+      Alpha: 1
+      Decay Time: 0
+      Queue Size: 1
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Instrument
+      Enabled: true
+      Topic:
+        Value: /sr3d/instrument_cloud
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Flat Squares
+      Size (m): 0.0003
+      Color Transformer: FlatColor
+      Color: 40; 200; 255
+      Alpha: 0.6
+      Decay Time: 0
+      Queue Size: 1
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Semantic cloud
+      Enabled: false
+      Value: false
+      Topic:
+        Value: /sr3d/semantic_cloud
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: label
+      Use rainbow: false
+      Min Color: 214; 120; 104
+      Max Color: 40; 200; 255
+      Autocompute Intensity Bounds: false
+      Min Intensity: 0
+      Max Intensity: 1
+      Alpha: 1
+      Decay Time: 0
+      Queue Size: 1
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Proximity
+      Enabled: true
+      Topic:
+        Value: /sr3d/proximity
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Namespaces:
+        closest: true
+        distance: true
+        tips: true
+    - Class: rviz_default_plugins/Axes
+      Name: Camera
+      Enabled: true
+      Reference Frame: camera_left
+      Length: 0.01
+      Radius: 0.0008
+    - Class: rviz_default_plugins/Image
+      Name: Left camera
+      Enabled: true
+      Topic:
+        Value: /stereo/left/image_rect
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+  Enabled: true
+  Global Options:
+    Background Color: 15; 30; 42
+    Fixed Frame: scene_view
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 0.055
+      Focal Point:
+        X: 0.118
+        Y: 0.093
+        Z: 0.028
+      Pitch: 0.3
+      Yaw: -1.95
+      Near Clip Distance: 0.001
+      Field of View: 0.785
+      Target Frame: <Fixed Frame>
+Window Geometry:
+  Displays:
+    collapsed: true
+  Left camera:
+    collapsed: false
+  Height: 900
+  Width: 1600
+  Hide Left Dock: true
+  Hide Right Dock: false
+  X: 0
+  Y: 0

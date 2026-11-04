@@ -7,7 +7,7 @@ downstream results if left unchecked.
 
 | Item | Finding | How it was verified |
 |---|---|---|
-| Video layout | 1280x2048 H.264 at ~54 fps, left image on top, right below | Frame shape |
+| Video layout | 1280x2048 H.264, left image on top, right below; container reports 60.0 fps (P1, P3; P2_1 reports none) | Frame shape, `cv2.CAP_PROP_FPS` |
 | Calibration | Baseline 4.16 mm, fx = 1034 px at full resolution (560 px at 640 wide) | `StereoCalibration.ini`, rectifier output |
 | Poses | One TUM line per video frame (0-based), metres, da Vinci forward kinematics | Line count = frame count (8465) |
 | Encoder jitter | Static camera shows +/-0.04 mm pose noise, so summed path length overstates motion | Trajectory plot of frames 0-1500 |

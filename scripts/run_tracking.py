@@ -1,8 +1,9 @@
 """Compare per-frame SegFormer against SAM 2 propagation on contiguous StereoMIS clips.
 
 Clips are picked from ground-truth tool fractions only (instrument visible through most of the
-window), evenly spread over the sequence. Frames are taken every 2nd video frame (25 fps), which
-is exactly the set of frames with a mask. Tune `--every` on val (P1); run test (P3) once.
+window), evenly spread over the sequence. Frames are taken every 2nd video frame (30 Hz at the 60 fps
+the video container reports), which is exactly the set of frames with a mask. Tune `--every` on val (P1);
+run test (P3) once.
 
     python scripts/run_tracking.py val outputs/segmentation/tracking_val.json --every 0 50 25 10 5
     python scripts/run_tracking.py test outputs/segmentation/tracking_test.json --every <best>
@@ -63,13 +64,13 @@ def main():
     ap.add_argument("--seg", default="outputs/segmentation/segformer_b2_fluor/best")
     ap.add_argument("--sam", default="small", choices=["small", "base_plus", "large"])
     ap.add_argument("--every", type=int, nargs="+", default=[0, 50, 25, 10, 5],
-                    help="re-prompt interval in clip frames (25 fps); 0 = first frame only")
+                    help="re-prompt interval in clip frames (every 2nd video frame); 0 = first frame only")
     ap.add_argument("--conf", type=int, nargs="*", default=[],
                     help="window sizes for confidence-gated prompting (best SegFormer frame per window)")
     ap.add_argument("--both-ways", action="store_true", help="also run forward+backward SAM 2 variants")
     ap.add_argument("--fuse", action="store_true", help="also run SAM 2 + SegFormer probability averages")
     ap.add_argument("--clips", type=int, default=6, help="clips per sequence")
-    ap.add_argument("--clip-len", type=int, default=300, help="video frames per clip (50 fps)")
+    ap.add_argument("--clip-len", type=int, default=300, help="video frames per clip (60 fps container rate)")
     a = ap.parse_args()
 
     fractions = json.loads(Path("outputs/segmentation/stereomis_tool_fraction.json").read_text())
