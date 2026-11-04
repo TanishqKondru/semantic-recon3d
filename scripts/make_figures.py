@@ -146,17 +146,91 @@ def tracking_test(out, result="outputs/segmentation/tracking_test.json"):
     fig.savefig(out / "tracking_test_clips.png", dpi=120)
 
 
+def fusion_heldout(out, scene_dir="data/scenes/stereomis_P2_1_tools", cache="outputs/fusion", frames=(100, 220)):
+    """Held-out views rendered from the TSDF mesh and the Gaussian map (needs gsplat: run in the activated env)."""
+    import open3d as o3d
+    import torch
+
+    from sr3d.data.scene import Scene
+    from sr3d.eval.fusion_metrics import MeshRenderer
+    from sr3d.fusion.gaussians import GaussianMap
+
+    scene = Scene(scene_dir)
+    c = Path(cache) / scene.meta.name
+    K, w, h = scene.K, scene.meta.width, scene.meta.height
+    tsdf = MeshRenderer(o3d.io.read_triangle_mesh(str(c / "tsdf_sam2.ply")))
+    params = torch.load(c / "gsplat.pt")
+    gs = GaussianMap(np.zeros((4, 3)), np.zeros((4, 3)), 1.0)
+    gs.params = torch.nn.ParameterDict({k: torch.nn.Parameter(v.cuda()) for k, v in params.items()})
+    fig, ax = plt.subplots(len(frames), 4, figsize=(16, 3.3 * len(frames)))
+    for r, i in enumerate(frames):
+        f = scene[i]
+        depth = cv2.imread(str(c / "depth_raft" / f"{i:06d}.png"), cv2.IMREAD_UNCHANGED) / 1e5
+        _, t_rgb = tsdf.render(K, scene.poses[i], w, h)
+        g_d, g_rgb = gs.render_numpy(K, scene.poses[i], w, h)
+        err = np.where((g_d > 0) & (depth > 0) & ~f.tool_mask, np.abs(g_d - depth) * 1000, np.nan)
+        panels = [(f.rgb, f"held-out frame {i}"), (np.clip(t_rgb, 0, 255).astype(np.uint8), "TSDF mesh"),
+                  (np.clip(g_rgb, 0, 255).astype(np.uint8), "Gaussian splatting")]
+        for k, (im, t) in enumerate(panels):
+            ax[r, k].imshow(im), ax[r, k].set_title(t, fontsize=10)
+        im = ax[r, 3].imshow(err, vmin=0, vmax=3, cmap="magma")
+        ax[r, 3].set_title("Gaussian depth vs stereo (mm)", fontsize=10)
+        fig.colorbar(im, ax=ax[r, 3], fraction=0.04)
+    for a in ax.flat:
+        a.set_xticks([]), a.set_yticks([])
+    fig.suptitle("Held-out views of the fused tissue map (instruments are not part of the static map)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out / "fusion_heldout.png", dpi=110)
+
+
+def fusion_labels(out, scene_dir="data/scenes/stereomis_P2_1_tools", cache="outputs/fusion"):
+    """The unmasked TSDF map from a pulled-back viewpoint, coloured by voted instrument probability."""
+    import open3d as o3d
+
+    from sr3d.data.scene import Scene
+    from sr3d.eval.fusion_metrics import MeshRenderer
+    from sr3d.fusion.labels import vote
+
+    scene = Scene(scene_dir)
+    c = Path(cache) / scene.meta.name
+    K, w, h, n = scene.K, scene.meta.width, scene.meta.height, len(scene)
+    mesh = o3d.io.read_triangle_mesh(str(c / "tsdf_none.ply"))
+    pts = np.asarray(mesh.vertices)
+    depth = [cv2.imread(str(c / "depth_raft" / f"{i:06d}.png"), cv2.IMREAD_UNCHANGED) / 1e5 for i in range(n)]
+    prob = [cv2.imread(str(c / "prob_sam2" / f"{i:06d}.png"), cv2.IMREAD_GRAYSCALE) / 255.0 for i in range(n)]
+    v = vote(pts, [(prob[i], depth[i], scene.poses[i]) for i in range(0, n, 2)], K)
+    base = np.asarray(mesh.vertex_colors).copy()
+    labelled = base * 0.6 + 0.4 * 0.5
+    instr = np.nan_to_num(v.prob) > 0.5
+    labelled[instr] = [1.0, 0.55, 0.1]
+    # camera pulled back 40 mm along its optical axis from the middle frame, wider field of view
+    T = scene.poses[n // 2].copy()
+    T[:3, 3] -= T[:3, 2] * 0.04
+    Kw = K.copy()
+    Kw[0, 0] = Kw[1, 1] = K[0, 0] * 0.6
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5.2))
+    for a, colors, title in ((ax[0], base, "Fused map, no instrument masking"),
+                             (ax[1], labelled, f"Voted labels: instrument = orange ({instr.mean() * 100:.1f}% of vertices)")):
+        mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+        _, rgb = MeshRenderer(mesh).render(Kw, T, w, h)
+        a.imshow(np.clip(rgb, 0, 255).astype(np.uint8)), a.set_title(title, fontsize=10)
+        a.set_xticks([]), a.set_yticks([])
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(out / "fusion_labels.png", dpi=110)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("out")
+    ap.add_argument("--only", nargs="*", help="figure function names to run (default: all)")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    training_curves(out)
-    tracking_clips(out)
-    tracking_test(out)
-    fluorescence_sim(out)
-    qualitative(out)
+    figures = [training_curves, tracking_clips, tracking_test, fluorescence_sim, qualitative, fusion_heldout,
+               fusion_labels]
+    for fn in figures:
+        if not a.only or fn.__name__ in a.only:
+            fn(out)
 
 
 if __name__ == "__main__":
