@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+# large artifacts stay out of git
+/data/
+/checkpoints/
+/outputs/
+*.pth
+*.pt
+*.onnx
+*.engine
+*.ply

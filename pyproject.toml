@@ -1,0 +1,18 @@
+[project]
+name = "sr3d"
+version = "0.1.0"
+description = "Semantic 3D reconstruction for robot perception (medical, industrial, indoor)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "opencv-python-headless", "open3d", "torch", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["sr3d*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
