@@ -24,7 +24,7 @@ Latency per call includes pre- and post-processing (numpy in, numpy out), CUDA s
 | Network | Backend | Latency median (P90) | Accuracy vs PyTorch |
 |---|---|---|---|
 | RAFT stereo (12 iterations) | PyTorch FP32 | 177 ms (181) | reference |
-| | TensorRT FP32 | 114 ms (116) | **not usable**: median 0.32 mm, P99 3.9 mm, validity agreement 79.6% |
+| | TensorRT FP32 (before fix) | 114 ms (116) | **not usable**: median 0.32 mm, P99 3.9 mm, validity agreement 79.6% |
 | | **TensorRT FP16 (mixed)** | **51 ms (54)** | median 0.046 mm, P99 0.39 mm, validity agreement 99.8% |
 | SegFormer-B2 | PyTorch (bf16 autocast) | 25.7 ms (36.3) | IoU vs ground truth 0.9406 |
 | | TensorRT FP32 | 19.2 ms (19.6) | IoU vs GT 0.9405, vs PyTorch 0.9997 |
@@ -35,18 +35,54 @@ IoU here is the mean per-frame IoU over frames with an instrument (60 frames, ev
 average from the pooled pixel IoU in `FUSION.md`.
 
 **End to end** (`ProximityPipeline.step`: depth, segmentation, fusion, proximity; 140 consecutive frames):
-PyTorch 244 ms median (P90 277), TensorRT FP16 102 ms (P90 131). In the ROS node: 243 → 100 ms compute,
-258 → 115 ms latency, 3.7 → 8.3 Hz every-frame rate; 9.2 Hz sustained on the 30 Hz camera stream (`ROS.md`).
-Proximity accuracy is unchanged on TensorRT: MAE 0.854 mm vs 0.850 mm (PyTorch) against the reference.
+PyTorch 244 ms median (P90 277), TensorRT FP16 102 ms (P90 131), + GPU nearest-neighbour search 87 ms
+(P90 101), + instrument shape prior 99 ms (P90 119). In the ROS node: 243 → 100 ms compute, 258 → 115 ms
+latency, 3.7 → 8.3 Hz every-frame rate; 9.2 Hz on the 30 Hz camera stream, 10.3 Hz with GPU nearest
+neighbours, 8.2 Hz with the shape prior (node default; `ROS.md`). Proximity accuracy is unchanged on
+TensorRT: MAE 0.854 mm vs 0.850 mm (PyTorch) against the reference. Re-measured on 2026-11-05: PyTorch RAFT
+178 ms, FP16 51-55 ms, FP32 115 ms (the same as on 2026-11-04 within 3 ms).
 
 ![Per-frame compute by stage](figures/deploy_latency.png)
 
-**The RAFT FP32 engine is wrong, not slow.** The FP32 ONNX graph is correct: ONNX Runtime reproduces the
-PyTorch flow to 0.0005 px (median). TensorRT 11.4's FP32 build of the same file gives P99 flow errors of
-19 px, with and without TF32. The mixed-precision engine is within 0.12 px (P99). The cause was not
-isolated; the FP32 engine is not used.
+**The RAFT FP32 engine was wrong, not slow; fixed by pinning the correlation volume.** The FP32 ONNX graph
+is correct (ONNX Runtime reproduces PyTorch to 0.0005 px), but TensorRT 11.4's FP32 build returned P99 flow
+errors of ~20-29 px. Bisection on a real P2_1 pair (`build_engine` docstring):
 
-After TensorRT, the k-d tree proximity step (30 ms, CPU) is the second-largest cost after depth.
+| Test (TensorRT FP32 vs ONNX Runtime, P99 flow error) | Result |
+|---|---|
+| 1 / 2 refinement iterations | 0.22 / 0.17 px (correct) |
+| 3 / 4 / 12 iterations | 23 / 21 / 29 px (wrong) |
+| builder optimisation level 0, 1, 2, 4, 5 (4 iterations) | all wrong (level 0: 72 px) |
+| all `GridSample` outputs marked as network outputs | correct (max 0.23 px) |
+| only level-0 lookups marked (levels 1-3 not) | correct; marking any other single level: wrong |
+| only the correlation volume (`MatMul` -> `Reshape`, read by every level-0 lookup) marked | **correct** |
+| only the iteration-3 lookup marked | worse (P99 106 px) |
+
+The full-resolution correlation volume is computed once and read by every iteration; the result is right
+while it is read only twice, and marking it as an output (a dedicated buffer for the whole inference) makes
+it right. That pattern fits the volume's memory being reused while still needed; it was not confirmed inside
+TensorRT (closed source). `export_trt.py` now pins it for both RAFT engines (`--no-pin` reproduces the bug).
+
+| RAFT engine (P2_1 frame 100, 12 iterations, vs ONNX Runtime) | Median | P99 | Max |
+|---|---|---|---|
+| TensorRT FP32, before | 0.21 px | 20.4 px | 21.7 px |
+| **TensorRT FP32, pinned** | **0.003 px** | **0.021 px** | **0.07 px** |
+| TensorRT FP16 mixed, before / pinned | 0.028 / 0.029 px | 0.155 / 0.168 px | 0.74 / 1.05 px |
+
+**Pin only FP32.** Pinning in the FP16 engine is not needed (same accuracy as unpinned) and costs 2.7 ms
+(54.8 vs 52.1 ms: the pinned tensor is written out every call), so `export_trt.py` pins the FP32 engine only.
+
+## GPU nearest-neighbour search
+
+After TensorRT, the k-d tree proximity step (30 ms, CPU) was the second-largest cost after depth; about half
+of it was building a k-d tree over the live frame's ~80k tissue points every frame. `sr3d/ros/gpu_nn.py`
+replaces the trees with an exact brute-force search in one Triton kernel (running minimum per instrument
+point, the distance matrix is never stored; squared distances from coordinate differences, so no
+cancellation at sub-millimetre gaps; tissue outside the instruments' box grown by the search bound is
+skipped). Distances match the k-d tree to 0.011 um over all 300 P2_1 frames (unit-tested against cKDTree).
+Proximity 30 → 19 ms, end to end 101 → 87 ms. Triton compiles the kernel at start-up and needs a C compiler
+(`gcc_linux-64` in the conda envs, `build-essential` in the Dockerfile); without one the pipeline warns and
+falls back to the CPU trees.
 
 ## Docker
 

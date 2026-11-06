@@ -68,7 +68,24 @@ def export_onnx(module: torch.nn.Module, inputs: tuple, path: str | Path, names:
     return path
 
 
-def build_engine(onnx_path: str | Path, engine_path: str | Path, workspace_gb: float = 4.0) -> Path:
+def raft_corr_volume(onnx_path: str | Path) -> str:
+    """Name of RAFT's full-resolution correlation volume: the data input of the first GridSample."""
+    import onnx
+    graph = onnx.load(str(onnx_path), load_external_data=False).graph
+    return next(n.input[0] for n in graph.node if n.op_type == "GridSample")
+
+
+def build_engine(onnx_path: str | Path, engine_path: str | Path, workspace_gb: float = 4.0,
+                 pin_tensors: tuple[str, ...] = ()) -> Path:
+    """Build a strongly typed engine. `pin_tensors` are intermediate tensors marked as extra outputs so they
+    get a dedicated buffer for the whole inference.
+
+    RAFT FP32 needs its correlation volume pinned (`raft_corr_volume`). Without it, TensorRT 11.4 returns
+    wrong flow from the third refinement iteration on (P99 29 px after 12 iterations, any builder
+    optimisation level), while ONNX Runtime on the same file is exact. The volume is computed once and read
+    by every iteration. Marking it, or the first lookup that reads it, as an output restores the correct
+    result; marking other tensors moves the error around. This looks like the volume's memory being reused
+    while it is still needed, but that was not verified inside TensorRT."""
     import tensorrt as trt
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
@@ -76,6 +93,18 @@ def build_engine(onnx_path: str | Path, engine_path: str | Path, workspace_gb: f
     parser = trt.OnnxParser(network, logger)
     if not parser.parse(Path(onnx_path).read_bytes()):
         raise RuntimeError("\n".join(str(parser.get_error(i)) for i in range(parser.num_errors)))
+    if pin_tensors:
+        found = {}
+        for i in range(network.num_layers):
+            layer = network.get_layer(i)
+            for j in range(layer.num_outputs):
+                if layer.get_output(j).name in pin_tensors:
+                    found[layer.get_output(j).name] = layer.get_output(j)
+        missing = set(pin_tensors) - set(found)
+        if missing:
+            raise RuntimeError(f"tensors to pin not found in network: {sorted(missing)}")
+        for t in found.values():
+            network.mark_output(t)
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30)))
     blob = builder.build_serialized_network(network, config)
@@ -93,14 +122,18 @@ class TRTModule:
         self.runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
         self.engine = self.runtime.deserialize_cuda_engine(Path(engine_path).read_bytes())
         self.context = self.engine.create_execution_context()
-        self.stream = torch.cuda.current_stream()
+        self.stream = torch.cuda.Stream()     # TensorRT adds a sync per call on the legacy default stream
         names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)]
         self.inputs = [n for n in names if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT]
         dt = {trt.DataType.FLOAT: torch.float32, trt.DataType.HALF: torch.float16}
-        self.out = torch.empty(tuple(self.engine.get_tensor_shape("out")),
-                               dtype=dt[self.engine.get_tensor_dtype("out")], device="cuda")
         self.in_dtype = {n: dt[self.engine.get_tensor_dtype(n)] for n in self.inputs}
-        self.context.set_tensor_address("out", self.out.data_ptr())
+        # 'out' plus any pinned intermediates (see `build_engine`); pinned buffers are written, never read
+        self.buffers = {n: torch.empty(tuple(self.engine.get_tensor_shape(n)),
+                                       dtype=dt[self.engine.get_tensor_dtype(n)], device="cuda")
+                        for n in names if n not in self.inputs}
+        for n, buf in self.buffers.items():
+            self.context.set_tensor_address(n, buf.data_ptr())
+        self.out = self.buffers["out"]
 
     def __call__(self, **tensors: torch.Tensor) -> torch.Tensor:
         keep = []
@@ -108,7 +141,12 @@ class TRTModule:
             t = tensors[n].to(self.in_dtype[n]).contiguous()
             keep.append(t)
             self.context.set_tensor_address(n, t.data_ptr())
+        caller = torch.cuda.current_stream()
+        self.stream.wait_stream(caller)          # inputs are ready
         self.context.execute_async_v3(self.stream.cuda_stream)
+        caller.wait_stream(self.stream)          # later torch work on the caller's stream sees the output
+        for t in keep:
+            t.record_stream(self.stream)         # keep converted inputs alive until the engine has read them
         return self.out
 
 

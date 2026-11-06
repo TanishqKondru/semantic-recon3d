@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--warmup", type=int, default=20)
     ap.add_argument("--runs", type=int, default=100)
     ap.add_argument("--e2e-frames", type=int, default=150)
+    ap.add_argument("--out", default="outputs/deploy", help="directory for benchmark_<scene>.json")
+    ap.add_argument("--skip-sam2", action="store_true")
     a = ap.parse_args()
 
     scene = Scene(a.scene)
@@ -90,8 +92,13 @@ def main():
     # end to end: the node's per-frame step (depth, segmentation, fusion, proximity) over consecutive frames
     seq = [scene[i] for i in range(a.e2e_frames)]
     results["end_to_end"] = {}
-    for name in ("pytorch", "trt_fp16"):
-        pipe = ProximityPipeline(scene.K, lambda l, r, s=stereo[name]: s.depth(l, r, fx, B), seg[name].prob)
+    # trt_fp16_gpu_nn: same networks, nearest-neighbour search on the GPU (sr3d.ros.gpu_nn)
+    # + "_tool": instrument shape prior (sr3d.ros.toolmodel, r = 4 mm), the ROS node's default
+    for name, backend, gpu_nn, radius in (("pytorch", "pytorch", False, None), ("trt_fp16", "trt_fp16", False, None),
+                                          ("trt_fp16_gpu_nn", "trt_fp16", True, None),
+                                          ("trt_fp16_gpu_nn_tool", "trt_fp16", True, 4e-3)):
+        pipe = ProximityPipeline(scene.K, lambda l, r, s=stereo[backend]: s.depth(l, r, fx, B), seg[backend].prob,
+                                 gpu_nn=gpu_nn, tool_radius=radius)
         rows = [pipe.step(f.rgb, f.right, f.T_wc).ms for f in seq]
         rows = rows[10:]    # warm-up: first map extractions and CUDA kernels
         r = {k: float(np.median([x[k] for x in rows])) for k in rows[0]}
@@ -101,6 +108,12 @@ def main():
     del stereo, seg
     torch.cuda.empty_cache()
 
+    out = Path(a.out) / f"benchmark_{scene.meta.name}.json"
+    results["gpu_clocks_mhz"] = _clocks()
+    if a.skip_sam2:
+        out.write_text(json.dumps(results, indent=1))
+        print(f"-> {out}")
+        return
     from sr3d.segmentation.tracking import keyframes, load_sam2, track
     sam = load_sam2("large")
     clip = [f.rgb for f in seq[:100]]
@@ -115,9 +128,15 @@ def main():
     print(f"sam2  large     {results['sam2_large_ms_per_frame']:.1f} ms / frame (offline video propagation, "
           f"{len(clip)} frames)")
 
-    out = Path("outputs/deploy") / f"benchmark_{scene.meta.name}.json"
     out.write_text(json.dumps(results, indent=1))
     print(f"-> {out}")
+
+
+def _clocks():
+    import subprocess
+    q = subprocess.run(["nvidia-smi", "--query-gpu=clocks.sm,clocks.max.sm,power.draw", "--format=csv,noheader"],
+                       capture_output=True, text=True).stdout.strip()
+    return q
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 # ROS 2 Jazzy + the proximity node with TensorRT engines.
-# UNTESTED: written on a machine without Docker; every command below mirrors the conda setup that was run.
+# NOT YET BUILT: written on a machine without Docker; every command below mirrors the conda setup that was run.
+# build-essential: Triton compiles the GPU nearest-neighbour kernel at start-up (sr3d/ros/gpu_nn.py).
 #
 #   docker build -f docker/Dockerfile -t sr3d-ros .
 #   docker run --gpus all --rm -v $PWD/data:/ws/data -v $PWD/outputs:/ws/outputs sr3d-ros \
@@ -10,7 +11,7 @@
 FROM ros:jazzy-ros-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-pip python3-venv ros-jazzy-message-filters ros-jazzy-tf2-ros-py ros-jazzy-sensor-msgs-py \
+        python3-pip python3-venv build-essential ros-jazzy-message-filters ros-jazzy-tf2-ros-py ros-jazzy-sensor-msgs-py \
         ros-jazzy-visualization-msgs libgl1 libgomp1 libusb-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 

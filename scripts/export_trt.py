@@ -10,7 +10,7 @@ import torch
 from torchvision.models.optical_flow import Raft_Large_Weights, raft_large
 from transformers import SegformerForSemanticSegmentation
 
-from sr3d.deploy.engines import RAFT_FP32_OPS, RAFTFlow, SegFormerProb, build_engine, export_onnx
+from sr3d.deploy.engines import RAFT_FP32_OPS, RAFTFlow, SegFormerProb, build_engine, export_onnx, raft_corr_volume
 
 
 def main():
@@ -22,6 +22,8 @@ def main():
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--precisions", nargs="+", default=["fp16", "fp32"])
     ap.add_argument("--only", nargs="+", default=["segformer", "raft"])
+    ap.add_argument("--no-pin", action="store_true", help="do not pin the RAFT FP32 correlation volume "
+                    "(reproduces the TensorRT FP32 bug, see build_engine)")
     a = ap.parse_args()
     out = Path(a.out)
     h, w = a.height, a.width
@@ -37,7 +39,9 @@ def main():
             t0 = time.time()
             onnx = export_onnx(make(), inputs, out / f"{name}_{prec}.onnx", names, prec == "fp16", fp32_ops)
             t1 = time.time()
-            build_engine(onnx, out / f"{name}_{prec}.engine")
+            # FP32 needs the pin (TensorRT bug, see build_engine); FP16 is correct without it and 2.7 ms faster
+            pin = (raft_corr_volume(onnx),) if name == "raft" and prec == "fp32" and not a.no_pin else ()
+            build_engine(onnx, out / f"{name}_{prec}.engine", pin_tensors=pin)
             print(f"{name} {prec}: ONNX {t1 - t0:.0f} s, engine {time.time() - t1:.0f} s", flush=True)
             torch.cuda.empty_cache()
 

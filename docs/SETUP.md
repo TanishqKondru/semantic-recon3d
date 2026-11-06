@@ -44,6 +44,7 @@ Verify with `python scripts/check_env.py`. The first run compiles gsplat (~75 s)
 | EndoNeRF samples | Google Drive via github.com/med-air/EndoNeRF | Open | Non-commercial, no redistribution, cite Wang et al. MICCAI 2022 |
 | EndoVis 2018 | grand-challenge.org | Registration | Challenge rules |
 | SCARED | Challenge organizers | Request | Challenge rules |
+| SERV-CT (ex-vivo porcine, CT reference) | figshare DOI 10.5522/04/26352199 (`SERV-CT.zip`, MD5 911048d7…) | Open | CC BY-NC-SA 4.0 per its readme (figshare page says CC BY 4.0; the stricter terms are followed), cite Edwards et al. MedIA 2022 |
 
 Raw and converted data are git-ignored and must never be pushed: several licenses forbid redistribution.
 Google Drive throttles scripted downloads (gdown "Cannot retrieve the public link"); download EndoNeRF in a browser.

@@ -39,6 +39,9 @@ class Tool:
     distance: float = np.nan          # metres to the tissue map (robust minimum over `points`)
     closest_tool: np.ndarray | None = None    # (3,) instrument point that attains `distance`
     closest_tissue: np.ndarray | None = None  # (3,) its nearest map point
+    distance_visible: float = np.nan  # from the visible instrument surface only
+    distance_model: float = np.nan    # from the fitted capsule (`sr3d.ros.toolmodel`), NaN if not fitted
+    capsule: object | None = None     # CapsuleFit when fitted
 
 
 def find_tip(component: np.ndarray, margin: int = 5) -> tuple[int, int] | None:
@@ -113,8 +116,13 @@ class TissueModel:
 
 
 def measure(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, T_wc: np.ndarray, tissue: TissueModel | None,
-            erode_px: int = 3, min_pixels: int = 200, median_px: int = 5) -> list[Tool]:
-    """Per-instrument tip and distance to tissue for one frame. depth in metres, mask bool, T_wc camera->world."""
+            erode_px: int = 3, min_pixels: int = 200, median_px: int = 5,
+            tool_radius: float | None = None, tool_mode: str = "tiered") -> list[Tool]:
+    """Per-instrument tip and distance to tissue for one frame. depth in metres, mask bool, T_wc camera->world.
+
+    With `tool_radius` (metres, from the instrument's specification), a capsule of that radius is fitted to the
+    visible instrument points and the reported distance is min(visible-surface distance, capsule distance):
+    the capsule covers the underside the camera cannot see (`sr3d.ros.toolmodel`)."""
     n, comp, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
     core = erode(mask & (depth > 0), erode_px)
     tools = []
@@ -128,8 +136,29 @@ def measure(depth: np.ndarray, mask: np.ndarray, K: np.ndarray, T_wc: np.ndarray
         t = Tool(int(stats[c, cv2.CC_STAT_AREA]), uv, tip, pts)
         if tissue is not None and len(tissue) and len(pts):
             t.distance, t.closest_tool, t.closest_tissue = closest(pts, vu, tissue, median_px)
+            t.distance_visible = t.distance
+            if tool_radius:
+                model_closest(t, tissue, tool_radius, T_wc[:3, 3], tool_mode)
         tools.append(t)
     return tools
+
+
+def model_closest(t: Tool, tissue: TissueModel, radius: float, cam_centre: np.ndarray, mode: str = "tiered") -> None:
+    """Distance from the instrument capsule to the tissue; updates `t` when it is closer than the visible surface.
+    mode: "fit" (curvature fit), "offset" (axis one radius behind the visible points) or "tiered" (fit, else
+    offset); see `sr3d.ros.toolmodel`."""
+    from .toolmodel import instrument_capsule
+    cap = instrument_capsule(t.points, radius, cam_centre, t.tip, mode)
+    if cap is None:
+        return
+    t.capsule = cap
+    samples = cap.surface_samples()
+    upper = t.distance_visible + 1e-3 if np.isfinite(t.distance_visible) else np.inf
+    d, nearest = tissue.query(samples, upper)
+    i = int(np.argmin(d))
+    t.distance_model = float(d[i]) if np.isfinite(d[i]) else np.inf
+    if t.distance_model < t.distance:
+        t.distance, t.closest_tool, t.closest_tissue = t.distance_model, samples[i], nearest[i]
 
 
 def closest(pts: np.ndarray, vu: np.ndarray, tissue: TissueModel, median_px: int, margin_m: float = 2e-3):

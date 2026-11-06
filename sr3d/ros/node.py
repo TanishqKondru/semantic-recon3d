@@ -57,6 +57,9 @@ class ProximityNode(Node):
             "segmenter": "outputs/segmentation/segformer_b2_fluor/best", "raft_iters": 12, "map_every": 10,
             "backend": "pytorch", "engines": "outputs/deploy", "precision": "fp16",
             "live_tissue": True, "live_dilate_px": 12, "erode_px": 1,
+            # instrument shape prior (sr3d.ros.toolmodel): shaft radius from the instrument's specification
+            # (da Vinci Xi: 8 mm diameter); 0 = visible surface only
+            "tool_radius_mm": 4.0, "tool_model": "tiered", "gpu_nn": True,
             "world_frame": "world", "cloud_stride": 2, "map_stride": 1,
             "log": "outputs/ros/node_timing.csv"}.items()}
         self.p = p
@@ -104,7 +107,9 @@ class ProximityNode(Node):
         fx, B = self.K[0, 0], self.baseline
         self.pipe = ProximityPipeline(self.K, lambda l, r: self.raft.depth(l, r, fx, B), self.seg.prob,
                                       map_every=self.p["map_every"], live_tissue=self.p["live_tissue"],
-                                      live_dilate_px=self.p["live_dilate_px"], erode_px=self.p["erode_px"])
+                                      live_dilate_px=self.p["live_dilate_px"], erode_px=self.p["erode_px"],
+                                      tool_radius=self.p["tool_radius_mm"] * 1e-3 or None,
+                                      tool_mode=self.p["tool_model"], gpu_nn=self.p["gpu_nn"])
         self.get_logger().info(f"camera: fx {fx:.1f} px, baseline {B * 1e3:.2f} mm")
 
     def _frame(self, left: Image, right: Image, pose: PoseStamped):
