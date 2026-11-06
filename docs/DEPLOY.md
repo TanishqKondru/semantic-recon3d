@@ -86,10 +86,39 @@ falls back to the CPU trees.
 
 ## Docker
 
-`docker/Dockerfile` (ROS 2 Jazzy base, CUDA 12.8 PyTorch wheels, TensorRT 11.4, the node and launch files).
-**It has not been built or run**: this machine has no Docker and no sudo. It mirrors the conda setup that
-was run. TensorRT engines are specific to the GPU and TensorRT version, so they are built inside the
-container (`scripts/export_trt.py`), not copied in.
+`docker/Dockerfile`: ROS 2 Jazzy (Ubuntu 24.04, Python 3.12), CUDA 12.8 PyTorch wheels, TensorRT 11.4, Triton,
+Open3D, the code, tests and launch files; RAFT weights baked in (9.5 GB image). Built and tested on 2026-11-06
+(Docker 29.1.3, NVIDIA Container Toolkit, RTX 5060 Laptop):
+
+```
+docker build -f docker/Dockerfile -t sr3d-ros .
+docker run --gpus all --rm --shm-size=1g --user $(id -u):$(id -g) -e HOME=/tmp -v sr3d-cache:/cache \
+    -v $PWD/data:/ws/data:ro -v $PWD/outputs:/ws/outputs sr3d-ros python scripts/selfcheck.py
+docker run ... sr3d-ros ros2 launch launch/proximity.launch.py backend:=tensorrt rate:=30.0
+```
+
+| In the container | Result |
+|---|---|
+| Unit tests / self-check | 54 / 54, 17 / 17 PASS (engines built on the host load unchanged: same GPU and TensorRT) |
+| ROS node, lockstep | 8.1 Hz, latency 126 / 145 ms (host 7.8 Hz, 123 / 141 ms) |
+| ROS node, 30 Hz input | 8.8 Hz, latency 129 / 148 ms (host 8.2 Hz, 140 / 158 ms) |
+| Node start-up (models loaded → pipeline ready) | 2.2 s with the kernel cache volume; 25-80 s when it is empty |
+
+What the first builds found (all fixed in the Dockerfile):
+
+* `ros2` runs on the system Python, and the launch file starts the node with the same interpreter
+  (`sys.executable`), which could not see the venv's torch; the `ros2` script's shebang now points at the venv.
+* Open3D needs `libEGL.so.1` even headless (`libegl1`); Triton needs `python3-dev` and a C compiler.
+* Open3D 0.20 ships no machine code for compute capability 12.0, so the driver JIT-compiles its CUDA kernels at
+  first use, every start in a fresh container (~80 s). `CUDA_CACHE_PATH` and `TRITON_CACHE_DIR` point at
+  `/cache`; mount a named volume there (`-v sr3d-cache:/cache`) and later starts take 2 s.
+* `--user` keeps files written to `outputs/` owned by you; the weights live in `/opt/torch` (world-readable).
+* `--shm-size=1g`: the default 64 MB `/dev/shm` is small for ROS 2 shared-memory transport of point clouds.
+* pip downloads time out on a flaky connection: one layer per package source, `PIP_DEFAULT_TIMEOUT=300`,
+  `PIP_RETRIES=10` and a BuildKit pip cache, so a retried build does not download again.
+
+TensorRT engines are specific to the GPU and the TensorRT version: on another GPU, rebuild them inside the
+container (`python scripts/export_trt.py`).
 
 ## Environment
 
